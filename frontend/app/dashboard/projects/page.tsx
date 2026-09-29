@@ -39,23 +39,26 @@ export default function ProjectsPage() {
                 <tr>
                   <th className="text-left p-3 font-medium">Title</th>
                   <th className="text-left p-3 font-medium">Status</th>
-                  <th className="text-left p-3 font-medium">Jobs</th>
+                  <th className="text-left p-3 font-medium">Progress</th>
                   <th className="text-left p-3 font-medium">Created</th>
                 </tr>
               </thead>
               <tbody>
                 {projects.map((p) => (
-                  <tr key={p.id} className="border-b last:border-0">
-                    <td className="p-3 max-w-xs truncate">{p.title}</td>
+                  <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
+                    <td className="p-3">
+                      <Link href={`/dashboard/projects/${p.id}`} className="text-blue-600 hover:underline max-w-xs truncate block">
+                        {p.title}
+                      </Link>
+                    </td>
                     <td className="p-3">
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                        p.status === "COMPLETED" ? "bg-green-100 text-green-700" :
+                        p.status === "COMPLETED" || p.status === "PREVIEW" ? "bg-green-100 text-green-700" :
                         p.status === "FAILED" ? "bg-red-100 text-red-700" :
-                        p.status === "PROCESSING" ? "bg-blue-100 text-blue-700" :
-                        "bg-slate-100 text-slate-600"
+                        "bg-blue-100 text-blue-700"
                       }`}>{p.status}</span>
                     </td>
-                    <td className="p-3 text-slate-500">{p.jobs?.length || 0}</td>
+                    <td className="p-3">{p.progress ?? 0}%</td>
                     <td className="p-3 text-slate-500">{new Date(p.createdAt).toLocaleString()}</td>
                   </tr>
                 ))}

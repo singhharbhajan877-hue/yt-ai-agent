@@ -1,8 +1,10 @@
 FROM node:20-alpine
 WORKDIR /app
 
-# FFmpeg for video processing
-RUN apk add --no-cache ffmpeg
+# FFmpeg + yt-dlp + python for yt-dlp
+RUN apk add --no-cache ffmpeg python3 py3-pip curl \
+  && pip3 install --break-system-packages yt-dlp \
+  || pip3 install yt-dlp
 
 COPY package.json package-lock.json* ./
 COPY worker/package.json ./worker/

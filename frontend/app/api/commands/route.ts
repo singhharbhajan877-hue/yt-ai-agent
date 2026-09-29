@@ -5,6 +5,15 @@ import { parseCommand } from "@/lib/gemini";
 import { prisma } from "@/lib/prisma";
 import { enqueueMediaJob } from "@/lib/queue";
 
+const CREDIT_COST: Record<string, number> = {
+  generate_shorts: 10,
+  generate_long: 25,
+  download: 5,
+  seo: 2,
+  thumbnail: 3,
+  unknown: 5,
+};
+
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -19,133 +28,153 @@ export async function POST(req: NextRequest) {
     }
 
     const userId = (session.user as any).id as string;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
 
     let parsed: any;
     try {
       parsed = await parseCommand(command);
-    } catch (e) {
-      console.error("[commands] parse failed", e);
+    } catch {
+      // Extract URL heuristically
+      const urlMatch = command.match(/(https?:\/\/[^\s]+youtube[^\s]*|https?:\/\/youtu\.be\/[^\s]+)/i);
       parsed = {
-        intent: "unknown",
-        count: null,
+        intent: urlMatch ? "generate_shorts" : "unknown",
+        count: 5,
         durationMinutes: null,
         style: null,
-        sourceUrl: null,
+        sourceUrl: urlMatch ? urlMatch[0] : null,
         topic: command,
         visibility: "private",
         scheduleAt: null,
-        notes: "Parse fallback",
       };
     }
+
+    // If URL present, force download-first pipeline
+    const hasUrl = !!parsed.sourceUrl;
+    const intent = hasUrl ? (parsed.intent === "generate_long" ? "generate_long" : "generate_shorts") : parsed.intent;
+    const cost = CREDIT_COST[intent] || CREDIT_COST.unknown;
+
+    if (user.credits < cost) {
+      return NextResponse.json(
+        {
+          error: `Insufficient credits. Need ${cost}, have ${user.credits}. Buy more on the Billing page.`,
+          credits: user.credits,
+          required: cost,
+        },
+        { status: 402 }
+      );
+    }
+
+    // Deduct credits
+    await prisma.user.update({
+      where: { id: userId },
+      data: { credits: { decrement: cost } },
+    });
+    await prisma.creditLog.create({
+      data: {
+        userId,
+        amount: -cost,
+        reason: `Command: ${intent}`,
+      },
+    });
 
     const project = await prisma.project.create({
       data: {
         userId,
         title: command.slice(0, 120),
         command,
-        status: "QUEUED",
+        status: hasUrl ? "QUEUED" : "QUEUED",
         style: parsed.style || null,
-        targetDurationSec: parsed.durationMinutes
-          ? Math.round(parsed.durationMinutes * 60)
-          : null,
-        inputType: parsed.sourceUrl ? "youtube_url" : "prompt",
+        targetDurationSec: parsed.durationMinutes ? Math.round(parsed.durationMinutes * 60) : null,
+        inputType: hasUrl ? "youtube_url" : "prompt",
         inputUrl: parsed.sourceUrl || null,
-        inputMeta: parsed,
+        inputMeta: { ...parsed, intent },
+        progress: 0,
+        creditsUsed: cost,
       },
+    });
+
+    await prisma.creditLog.updateMany({
+      where: { userId, reason: `Command: ${intent}`, projectId: null },
+      data: { projectId: project.id },
     });
 
     await prisma.commandLog.create({
-      data: {
-        userId,
-        command,
-        parsed,
-        projectId: project.id,
-      },
+      data: { userId, command, parsed, projectId: project.id },
     });
 
-    const jobDefs: { type: any; name: string; payload: any }[] = [];
+    const createdJobs: string[] = [];
 
-    switch (parsed.intent) {
-      case "generate_shorts":
-        jobDefs.push(
-          { type: "ANALYZE", name: "analyze", payload: { projectId: project.id, sourceUrl: parsed.sourceUrl } },
-          {
-            type: "GENERATE_SHORTS",
-            name: "generate_shorts",
-            payload: { projectId: project.id, count: parsed.count || 5, source: parsed.style },
-          },
-          { type: "GENERATE_SEO", name: "generate_seo", payload: { projectId: project.id } },
-          { type: "GENERATE_THUMBNAIL", name: "generate_thumbnail", payload: { projectId: project.id } }
-        );
-        break;
-      case "generate_long":
-        jobDefs.push(
-          {
-            type: "GENERATE_LONG",
-            name: "generate_long",
-            payload: {
-              projectId: project.id,
-              durationMinutes: parsed.durationMinutes || 10,
-              topic: parsed.topic || command,
-              style: parsed.style || "educational",
-            },
-          },
-          { type: "GENERATE_SEO", name: "generate_seo", payload: { projectId: project.id } },
-          { type: "GENERATE_THUMBNAIL", name: "generate_thumbnail", payload: { projectId: project.id } }
-        );
-        break;
-      case "seo":
-      case "thumbnail":
-        jobDefs.push({
-          type: parsed.intent === "seo" ? "GENERATE_SEO" : "GENERATE_THUMBNAIL",
-          name: parsed.intent === "seo" ? "generate_seo" : "generate_thumbnail",
-          payload: { projectId: project.id },
-        });
-        break;
-      default:
-        jobDefs.push({
-          type: "ANALYZE",
-          name: "analyze",
-          payload: { projectId: project.id, raw: parsed },
-        });
-    }
-
-    const createdJobs = [];
-    for (const def of jobDefs) {
+    if (hasUrl) {
+      // Pipeline starts with DOWNLOAD – worker chains the rest
       const job = await prisma.job.create({
         data: {
           projectId: project.id,
-          type: def.type,
+          type: "DOWNLOAD",
           status: "WAITING",
-          payload: def.payload,
+          payload: { projectId: project.id, sourceUrl: parsed.sourceUrl },
         },
       });
-
-      const bullJob = await enqueueMediaJob(def.name, {
-        ...def.payload,
+      const bull = await enqueueMediaJob("download", {
+        projectId: project.id,
+        sourceUrl: parsed.sourceUrl,
         dbJobId: job.id,
         userId,
       });
-
-      await prisma.job.update({
-        where: { id: job.id },
-        data: { bullJobId: bullJob.id },
+      await prisma.job.update({ where: { id: job.id }, data: { bullJobId: bull.id } });
+      createdJobs.push(job.id);
+    } else if (intent === "generate_long") {
+      const job = await prisma.job.create({
+        data: {
+          projectId: project.id,
+          type: "GENERATE_LONG",
+          status: "WAITING",
+          payload: {
+            projectId: project.id,
+            durationMinutes: parsed.durationMinutes || 10,
+            topic: parsed.topic || command,
+            style: parsed.style || "educational",
+          },
+        },
       });
-
+      const bull = await enqueueMediaJob("generate_long", {
+        ...job.payload as object,
+        dbJobId: job.id,
+        userId,
+      });
+      await prisma.job.update({ where: { id: job.id }, data: { bullJobId: bull.id } });
+      createdJobs.push(job.id);
+    } else {
+      const job = await prisma.job.create({
+        data: {
+          projectId: project.id,
+          type: "ANALYZE",
+          status: "WAITING",
+          payload: { projectId: project.id, raw: parsed },
+        },
+      });
+      const bull = await enqueueMediaJob("analyze", {
+        projectId: project.id,
+        dbJobId: job.id,
+        userId,
+        raw: parsed,
+      });
+      await prisma.job.update({ where: { id: job.id }, data: { bullJobId: bull.id } });
       createdJobs.push(job.id);
     }
 
     return NextResponse.json({
       success: true,
       projectId: project.id,
-      parsed,
+      parsed: { ...parsed, intent },
       jobs: createdJobs,
+      creditsUsed: cost,
+      creditsRemaining: user.credits - cost,
     });
   } catch (err: any) {
     console.error("[commands] error", err);
-    return NextResponse.json(
-      { error: err.message || "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err.message || "Internal server error" }, { status: 500 });
   }
 }
