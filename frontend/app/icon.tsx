@@ -8,16 +8,15 @@ export default function Icon() {
     (
       <div
         style={{
+          fontSize: 16,
+          background: "#2563eb",
           width: "100%",
           height: "100%",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#2563eb",
           color: "white",
-          fontSize: 18,
           fontWeight: 700,
-          borderRadius: 6,
         }}
       >
         YT
