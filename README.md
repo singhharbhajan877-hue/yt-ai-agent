@@ -1,128 +1,74 @@
 # YT AI Agent
 
-**Production-ready AI SaaS platform** that connects to a user's YouTube channel via official Google OAuth 2.0 + YouTube Data API v3 and automates content creation, editing, SEO, scheduling, analytics, and uploading.
+**Production-oriented AI SaaS** that connects to a user's YouTube channel via official Google OAuth 2.0 + YouTube Data API v3 and automates content creation, editing, SEO, scheduling, analytics, and uploading.
 
-> **Important**: This system uses **only official Google/YouTube APIs**. Users may only process and upload content they own or have explicit permission to use. No browser automation or YouTube Studio bypass is implemented.
+> Uses **only official Google/YouTube APIs**. Users may only process and upload content they own or have permission to use.
 
-## Features Overview
+**Repo:** https://github.com/singhharbhajan877-hue/yt-ai-agent
 
-| Area | Capabilities |
-|------|--------------|
-| **Auth** | Google OAuth 2.0, YouTube channel connect, JWT sessions, multi-user |
-| **AI Command Box** | Natural language commands ("Create 5 Shorts from this video", "Create a 20-min documentary", etc.) |
-| **Shorts AI** | Moment detection, 9:16 crop, auto-zoom, captions, music, SEO, upload |
-| **Long-form AI** | Script generation, chapters, voiceover, B-roll placeholders, multi-language |
-| **Video Editor** | Cut/trim/merge, silence removal, transitions, color grading hooks |
-| **SEO & Thumbnails** | AI titles, descriptions, tags, hashtags, CTR-optimized thumbnails |
-| **Channel AI** | Analytics sync, content calendar, trending suggestions, upload plans |
-| **Upload** | Private / Unlisted / Public / Scheduled via official YouTube Data API v3 |
-| **Payments** | Stripe + Razorpay + UPI subscription plans |
-| **Infra** | PostgreSQL + Prisma, Redis queues, Docker, GitHub Actions |
+## Status (current)
 
-## Tech Stack
+| Feature | Status |
+|---------|--------|
+| Google OAuth + YouTube scopes | ✅ Working |
+| Connect / refresh YouTube channel | ✅ Working |
+| AI Command Box (Gemini intent parse) | ✅ Working |
+| Project + Job creation + BullMQ enqueue | ✅ Working |
+| Worker: analyze / shorts / long / SEO / thumbnail | ✅ Implemented |
+| FFmpeg Shorts crop (when source file present) | ✅ Implemented |
+| Long-form script + chapters (Gemini) | ✅ Implemented |
+| Official YouTube upload (videos.insert) | ✅ Implemented |
+| Dashboard, Projects, Library, Settings | ✅ Working |
+| Billing (Stripe checkout + demo mode) | ✅ Working |
+| Admin panel (role-gated) | ✅ Working |
+| Docker (dev + prod compose) | ✅ Ready |
+| GitHub Actions CI | ✅ Ready |
 
-- **Frontend / Full-stack**: Next.js 15 (App Router), TypeScript, Tailwind CSS, shadcn/ui
-- **Backend**: Next.js API routes + Node.js workers
-- **Database**: PostgreSQL + Prisma ORM
-- **Queue**: Redis + BullMQ
-- **AI**: Google Gemini API, Whisper (transcription), FFmpeg (media processing)
-- **Auth**: Google OAuth 2.0 + JWT
-- **YouTube**: Official `googleapis` YouTube Data API v3
-- **Payments**: Stripe + Razorpay
-- **Deploy**: Docker, Railway / Render / Vercel
-- **CI/CD**: GitHub Actions
-
-## Project Structure
-
-```
-yt-ai-agent/
-├── frontend/                 # Next.js 15 App (UI + API routes)
-│   ├── app/
-│   ├── components/
-│   ├── lib/
-│   ├── prisma/
-│   └── ...
-├── worker/                   # Background job processors (BullMQ)
-├── database/                 # Prisma schema, migrations, seed
-├── docker/                   # Dockerfiles & compose
-├── .github/workflows/        # CI/CD
-├── docs/                     # Architecture, API, deployment guides
-├── package.json              # Root workspace
-└── README.md
-```
-
-## Quick Start (Local Development)
-
-### Prerequisites
-
-- Node.js 20+
-- Docker & Docker Compose
-- PostgreSQL (or use Docker)
-- Redis (or use Docker)
-- Google Cloud project with YouTube Data API v3 + OAuth consent screen
-- Gemini API key
-
-### 1. Clone & Install
+## Quick Start
 
 ```bash
 git clone https://github.com/singhharbhajan877-hue/yt-ai-agent.git
 cd yt-ai-agent
-npm install
-```
-
-### 2. Environment
-
-```bash
 cp .env.example .env
-# Fill in all required values (see docs/SETUP.md)
+# Fill GOOGLE_*, GEMINI_API_KEY, NEXTAUTH_SECRET, DATABASE_URL, REDIS_URL
+
+docker compose -f docker/docker-compose.yml up -d   # Postgres + Redis
+npm install
+npx prisma migrate dev --schema=database/prisma/schema.prisma
+npx prisma generate --schema=database/prisma/schema.prisma
+
+npm run dev          # Next.js → http://localhost:3000
+npm run worker       # background jobs
 ```
 
-### 3. Database
+1. Sign in with Google (YouTube scopes requested).
+2. Dashboard → Settings → **Connect YouTube Channel**.
+3. Type a command, e.g. `Create a 10-minute educational video about climate change`.
+4. Watch projects & jobs update; upload finished videos from Library.
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Environment
+
+See [.env.example](.env.example). Critical variables:
+
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `NEXTAUTH_SECRET`
+- `GEMINI_API_KEY`
+- `DATABASE_URL` / `REDIS_URL`
+- `STRIPE_*` (optional – demo mode without them)
+
+## Production
 
 ```bash
-npx prisma migrate dev
-npx prisma generate
+docker compose -f docker/docker-compose.prod.yml up --build -d
 ```
 
-### 4. Run with Docker (recommended)
+Or deploy frontend to Vercel and worker + Postgres + Redis to Railway/Render.
 
-```bash
-docker compose -f docker/docker-compose.yml up --build
-```
-
-Or run services individually:
-
-```bash
-# Terminal 1 – Next.js
-npm run dev
-
-# Terminal 2 – Worker
-npm run worker
-```
-
-App will be available at `http://localhost:3000`.
-
-## Official API Compliance
-
-- Authentication: Google OAuth 2.0 (authorized redirect URIs only)
-- Video operations: YouTube Data API v3 (`videos.insert`, `thumbnails.set`, `playlists`, etc.)
-- No headless browsers, no scraping of YouTube Studio, no unofficial clients for upload
-- Users must own or have rights to any source media they process
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design & data flow |
-| [docs/SETUP.md](docs/SETUP.md) | Detailed installation & Google Cloud setup |
-| [docs/API.md](docs/API.md) | REST API reference |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment guides |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Feature status & planned work |
+Full guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
-
----
-
-Built for creators who want an autonomous AI employee that respects platform rules and copyright.
+MIT

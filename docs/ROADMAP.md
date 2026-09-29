@@ -1,38 +1,41 @@
 # Roadmap & Feature Status
 
-## ✅ Implemented in this scaffold
+## ✅ Completed
 
-- Monorepo structure (frontend / worker / database / docker / docs)
-- Full Prisma schema (users, channels, projects, videos, jobs, analytics, subscriptions)
-- Next.js 15 app with landing + dashboard shell
-- Google OAuth + YouTube scopes configuration
-- Gemini command parser + script / SEO helpers
-- Official YouTube client helpers (`videos.insert`, thumbnails)
-- BullMQ workers skeleton (media, upload, analytics)
-- Docker Compose for Postgres + Redis
-- API contract documentation
-- Deployment & setup guides
+- [x] Monorepo (frontend / worker / database / docker / docs)
+- [x] Full Prisma schema
+- [x] Google OAuth 2.0 + YouTube Data API scopes
+- [x] Channel connect & token storage
+- [x] AI Command Box + Gemini intent parsing
+- [x] Project & Job lifecycle
+- [x] BullMQ media + upload queues
+- [x] Workers: analyze, generate_shorts, generate_long, generate_seo, generate_thumbnail, upload
+- [x] FFmpeg 9:16 Shorts pipeline (when source file available)
+- [x] Long-form script + chapter generation
+- [x] SEO title/description/tags/hashtags
+- [x] Thumbnail prompt generation
+- [x] Official YouTube resumable upload path
+- [x] Dashboard, Projects, Library, Settings, Analytics shell, Billing, Admin
+- [x] Stripe checkout (with demo fallback)
+- [x] Docker Compose (dev + prod) + Dockerfiles with FFmpeg
+- [x] GitHub Actions CI
+- [x] Error handling on API routes & workers
 
-## 🚧 Next implementation priorities
+## 🔜 Recommended next steps
 
-1. **Auth completion** – wire NextAuth routes, protect dashboard, store channel tokens encrypted
-2. **Command API** – `/api/commands` that creates Project + enqueues jobs
-3. **Real transcription** – Whisper integration
-4. **FFmpeg pipelines** – basic Shorts (9:16 crop + captions) and silence removal
-5. **Resumable upload** – complete official YouTube upload with progress
-6. **Stripe / Razorpay** – subscription plans and webhooks
-7. **Admin panel** – basic user / job overview
-8. **Thumbnail generation** – Gemini image or external model
-9. **Analytics sync** – pull channel stats daily
-10. **Content calendar UI**
+1. Wire Whisper transcription for real audio analysis of owned uploads
+2. Connect an image model (Imagen / Flux) for real thumbnail PNGs
+3. TTS voiceover for long-form scripts
+4. Full FFmpeg assembly of long-form (images + voice + music)
+5. Encrypt OAuth tokens at rest (AES / KMS)
+6. Razorpay / UPI billing path for India
+7. Automated analytics daily sync job
+8. Unit + integration tests (Vitest / Playwright)
+9. Rate limiting middleware
+10. Content calendar UI
 
-## 🔮 Advanced (future)
+## Design constraints (enforced)
 
-- Full long-form video assembly with AI B-roll
-- Face / object tracking effects
-- Multi-language voiceover
-- 4K export pipeline
-- GPU worker fleet
-- Team / agency multi-seat plans
-
-Contributions and PRs welcome once the core command → job → upload loop is solid.
+- Official Google OAuth + YouTube Data API v3 only
+- No browser automation / YouTube Studio scraping
+- Users process only content they own or have rights to
