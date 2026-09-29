@@ -1,68 +1,121 @@
 import { Worker, Queue } from "bullmq";
 import IORedis from "ioredis";
+import { PrismaClient } from "@prisma/client";
+import { processAnalyze } from "./jobs/analyze";
+import { processGenerateShorts } from "./jobs/generate-shorts";
+import { processGenerateLong } from "./jobs/generate-long";
+import { processGenerateSeo } from "./jobs/generate-seo";
+import { processGenerateThumbnail } from "./jobs/generate-thumbnail";
+import { processUpload } from "./jobs/upload";
 
+const prisma = new PrismaClient();
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
 });
 
-export const mediaQueue = new Queue("media", { connection });
-export const uploadQueue = new Queue("upload", { connection });
-export const analyticsQueue = new Queue("analytics", { connection });
+console.log("[worker] YT AI Agent workers starting...");
 
-console.log("[worker] Starting YT AI Agent workers...");
+async function updateJobStatus(
+  dbJobId: string | undefined,
+  status: "ACTIVE" | "COMPLETED" | "FAILED",
+  result?: any,
+  error?: string
+) {
+  if (!dbJobId) return;
+  await prisma.job.update({
+    where: { id: dbJobId },
+    data: {
+      status,
+      result: result || undefined,
+      error: error || undefined,
+      startedAt: status === "ACTIVE" ? new Date() : undefined,
+      finishedAt: status === "COMPLETED" || status === "FAILED" ? new Date() : undefined,
+      attempts: { increment: status === "FAILED" ? 1 : 0 },
+    },
+  });
+}
 
-// Media processing worker (transcribe, edit, render, shorts, long-form)
+async function maybeCompleteProject(projectId: string) {
+  const jobs = await prisma.job.findMany({ where: { projectId } });
+  const allDone = jobs.every((j) => j.status === "COMPLETED" || j.status === "FAILED");
+  if (!allDone) return;
+  const anyFailed = jobs.some((j) => j.status === "FAILED");
+  await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      status: anyFailed ? "FAILED" : "COMPLETED",
+      completedAt: new Date(),
+    },
+  });
+}
+
 const mediaWorker = new Worker(
   "media",
   async (job) => {
-    console.log(`[media] Processing job ${job.id} type=${job.name}`, job.data);
+    const dbJobId = job.data.dbJobId as string | undefined;
+    const projectId = job.data.projectId as string;
 
-    switch (job.name) {
-      case "transcribe":
-        // TODO: call Whisper API or local whisper
-        return { transcript: "placeholder" };
-      case "generate_shorts":
-        // TODO: FFmpeg pipeline – detect moments, crop 9:16, captions, music
-        return { shorts: [] };
-      case "generate_long":
-        // TODO: script → TTS → assembly → FFmpeg export
-        return { videoPath: null };
-      case "render":
-        // TODO: final FFmpeg render
-        return { outputPath: null };
-      default:
-        throw new Error(`Unknown media job: ${job.name}`);
+    await updateJobStatus(dbJobId, "ACTIVE");
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { status: "PROCESSING" },
+    }).catch(() => {});
+
+    try {
+      let result: any;
+      switch (job.name) {
+        case "analyze":
+          result = await processAnalyze(job.data);
+          break;
+        case "generate_shorts":
+          result = await processGenerateShorts(job.data);
+          break;
+        case "generate_long":
+          result = await processGenerateLong(job.data);
+          break;
+        case "generate_seo":
+          result = await processGenerateSeo(job.data);
+          break;
+        case "generate_thumbnail":
+          result = await processGenerateThumbnail(job.data);
+          break;
+        default:
+          throw new Error(`Unknown media job: ${job.name}`);
+      }
+
+      await updateJobStatus(dbJobId, "COMPLETED", result);
+      await maybeCompleteProject(projectId);
+      return result;
+    } catch (err: any) {
+      console.error(`[media] job ${job.id} failed`, err);
+      await updateJobStatus(dbJobId, "FAILED", undefined, err.message);
+      await maybeCompleteProject(projectId);
+      throw err;
     }
   },
   { connection, concurrency: 2 }
 );
 
-// YouTube upload worker – uses official Data API only
 const uploadWorker = new Worker(
   "upload",
   async (job) => {
-    console.log(`[upload] Processing job ${job.id}`, job.data);
-    // TODO: load tokens from DB, createYouTubeClient, videos.insert (resumable)
-    return { youtubeVideoId: null };
+    const dbJobId = job.data.dbJobId as string | undefined;
+    await updateJobStatus(dbJobId, "ACTIVE");
+    try {
+      const result = await processUpload(job.data);
+      await updateJobStatus(dbJobId, "COMPLETED", result);
+      return result;
+    } catch (err: any) {
+      await updateJobStatus(dbJobId, "FAILED", undefined, err.message);
+      throw err;
+    }
   },
   { connection, concurrency: 1 }
 );
 
-// Analytics sync
-const analyticsWorker = new Worker(
-  "analytics",
-  async (job) => {
-    console.log(`[analytics] Sync for channel ${job.data.channelId}`);
-    // TODO: youtube.channels.list + reports if available
-    return { synced: true };
-  },
-  { connection, concurrency: 3 }
-);
+mediaWorker.on("completed", (job) => console.log(`[media] ✓ ${job.name} ${job.id}`));
+mediaWorker.on("failed", (job, err) => console.error(`[media] ✗ ${job?.name} ${job?.id}`, err.message));
+uploadWorker.on("completed", (job) => console.log(`[upload] ✓ ${job.id}`));
+uploadWorker.on("failed", (job, err) => console.error(`[upload] ✗ ${job?.id}`, err.message));
 
-mediaWorker.on("completed", (job) => console.log(`[media] Done ${job.id}`));
-mediaWorker.on("failed", (job, err) => console.error(`[media] Failed ${job?.id}`, err));
-
-uploadWorker.on("completed", (job) => console.log(`[upload] Done ${job.id}`));
-uploadWorker.on("failed", (job, err) => console.error(`[upload] Failed ${job?.id}`, err));
-
-console.log("[worker] All workers registered. Waiting for jobs...");
+console.log("[worker] Ready – listening on media + upload queues");
