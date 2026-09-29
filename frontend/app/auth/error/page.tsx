@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
-export default function AuthErrorPage() {
+function ErrorContent() {
   const params = useSearchParams();
   const error = params.get("error") || "Unknown error";
 
@@ -20,5 +21,13 @@ export default function AuthErrorPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+export default function AuthErrorPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Loading…</div>}>
+      <ErrorContent />
+    </Suspense>
   );
 }

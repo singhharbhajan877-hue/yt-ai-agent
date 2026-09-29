@@ -1,20 +1,39 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
-const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
-  maxRetriesPerRequest: null,
-});
+let connection: IORedis | null = null;
+let mediaQueue: Queue | null = null;
+let uploadQueue: Queue | null = null;
+let analyticsQueue: Queue | null = null;
 
-export const mediaQueue = new Queue("media", { connection });
-export const uploadQueue = new Queue("upload", { connection });
-export const analyticsQueue = new Queue("analytics", { connection });
+function getConnection() {
+  if (!connection) {
+    connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
+      maxRetriesPerRequest: null,
+      lazyConnect: true,
+    });
+  }
+  return connection;
+}
+
+function getMediaQueue() {
+  if (!mediaQueue) mediaQueue = new Queue("media", { connection: getConnection() });
+  return mediaQueue;
+}
+
+function getUploadQueue() {
+  if (!uploadQueue) uploadQueue = new Queue("upload", { connection: getConnection() });
+  return uploadQueue;
+}
+
+export { getMediaQueue as mediaQueue, getUploadQueue as uploadQueue };
 
 export async function enqueueMediaJob(
   name: string,
   data: Record<string, unknown>,
   opts?: { priority?: number; delay?: number }
 ) {
-  return mediaQueue.add(name, data, {
+  return getMediaQueue().add(name, data, {
     priority: opts?.priority,
     delay: opts?.delay,
     attempts: 3,
@@ -25,7 +44,7 @@ export async function enqueueMediaJob(
 }
 
 export async function enqueueUploadJob(data: Record<string, unknown>) {
-  return uploadQueue.add("upload_youtube", data, {
+  return getUploadQueue().add("upload_youtube", data, {
     attempts: 5,
     backoff: { type: "exponential", delay: 10000 },
     removeOnComplete: 50,
