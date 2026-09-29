@@ -1,5 +1,4 @@
-// YT AI Agent – Prisma Schema
-// Production-ready data model for multi-user YouTube AI SaaS
+// YT AI Agent – Prisma Schema (production)
 
 generator client {
   provider = "prisma-client-js"
@@ -26,7 +25,10 @@ enum SubscriptionStatus {
 enum ProjectStatus {
   DRAFT
   QUEUED
+  DOWNLOADING
+  ANALYZING
   PROCESSING
+  PREVIEW
   COMPLETED
   FAILED
   CANCELLED
@@ -40,6 +42,7 @@ enum VideoVisibility {
 
 enum UploadStatus {
   PENDING
+  AWAITING_APPROVAL
   UPLOADING
   UPLOADED
   SCHEDULED
@@ -47,6 +50,7 @@ enum UploadStatus {
 }
 
 enum JobType {
+  DOWNLOAD
   TRANSCRIBE
   ANALYZE
   GENERATE_SHORTS
@@ -54,9 +58,9 @@ enum JobType {
   EDIT_VIDEO
   GENERATE_THUMBNAIL
   GENERATE_SEO
+  RENDER
   UPLOAD_YOUTUBE
   SYNC_ANALYTICS
-  RENDER
 }
 
 enum JobStatus {
@@ -73,6 +77,7 @@ model User {
   name          String?
   image         String?
   role          Role      @default(USER)
+  credits       Int       @default(50)  // free starter credits
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -83,6 +88,7 @@ model User {
   videos        Video[]
   commands      CommandLog[]
   subscription  Subscription?
+  creditLogs    CreditLog[]
 
   @@map("users")
 }
@@ -120,7 +126,7 @@ model Session {
 model YouTubeChannel {
   id              String   @id @default(cuid())
   userId          String
-  channelId       String   // YouTube channel ID
+  channelId       String
   title           String
   description     String?  @db.Text
   thumbnailUrl    String?
@@ -128,7 +134,7 @@ model YouTubeChannel {
   subscriberCount Int?
   viewCount       BigInt?
   videoCount      Int?
-  accessToken     String   @db.Text  // encrypted at rest in production
+  accessToken     String   @db.Text
   refreshToken    String?  @db.Text
   tokenExpiresAt  DateTime?
   scopes          String[]
@@ -153,14 +159,16 @@ model Project {
   title       String
   description String?       @db.Text
   status      ProjectStatus @default(DRAFT)
-  command     String        @db.Text  // original natural-language command
-  style       String?       // educational, documentary, horror, etc.
+  command     String        @db.Text
+  style       String?
   targetDurationSec Int?
-  inputType   String?       // youtube_url, upload, prompt, etc.
+  inputType   String?
   inputUrl    String?
   inputMeta   Json?
   resultMeta  Json?
+  progress    Int           @default(0)  // 0-100
   error       String?       @db.Text
+  creditsUsed Int           @default(0)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   completedAt DateTime?
@@ -186,9 +194,10 @@ model Video {
   categoryId      String?
   visibility      VideoVisibility @default(PRIVATE)
   durationSec     Int?
-  filePath        String?         // local or S3 path of rendered file
+  filePath        String?
   thumbnailPath   String?
-  youtubeVideoId  String?         // set after successful upload
+  previewPath     String?
+  youtubeVideoId  String?
   uploadStatus    UploadStatus    @default(PENDING)
   scheduledAt     DateTime?
   uploadedAt      DateTime?
@@ -212,6 +221,7 @@ model Job {
   type        JobType
   status      JobStatus @default(WAITING)
   priority    Int       @default(0)
+  progress    Int       @default(0)
   payload     Json
   result      Json?
   error       String?   @db.Text
@@ -266,7 +276,7 @@ model ChannelAnalytics {
 model Subscription {
   id                   String             @id @default(cuid())
   userId               String             @unique
-  planId               String             // e.g. starter, pro, agency
+  planId               String
   status               SubscriptionStatus @default(TRIALING)
   stripeCustomerId     String?
   stripeSubscriptionId String?
@@ -284,15 +294,29 @@ model Subscription {
 
 model Plan {
   id          String   @id @default(cuid())
-  name        String   @unique  // starter, pro, agency
+  name        String   @unique
   displayName String
-  priceMonthly Int     // in cents / paise
+  priceMonthly Int
   priceYearly  Int?
   currency    String   @default("USD")
-  features    Json     // limits: videos/month, channels, 4k, etc.
+  credits     Int      @default(100)
+  features    Json
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@map("plans")
+}
+
+model CreditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Int      // positive = credit, negative = debit
+  reason    String
+  projectId String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("credit_logs")
 }
