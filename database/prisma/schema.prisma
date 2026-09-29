@@ -1,0 +1,298 @@
+// YT AI Agent – Prisma Schema
+// Production-ready data model for multi-user YouTube AI SaaS
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+  INCOMPLETE
+}
+
+enum ProjectStatus {
+  DRAFT
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum VideoVisibility {
+  PRIVATE
+  UNLISTED
+  PUBLIC
+}
+
+enum UploadStatus {
+  PENDING
+  UPLOADING
+  UPLOADED
+  SCHEDULED
+  FAILED
+}
+
+enum JobType {
+  TRANSCRIBE
+  ANALYZE
+  GENERATE_SHORTS
+  GENERATE_LONG
+  EDIT_VIDEO
+  GENERATE_THUMBNAIL
+  GENERATE_SEO
+  UPLOAD_YOUTUBE
+  SYNC_ANALYTICS
+  RENDER
+}
+
+enum JobStatus {
+  WAITING
+  ACTIVE
+  COMPLETED
+  FAILED
+  DELAYED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  role          Role      @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  channels      YouTubeChannel[]
+  projects      Project[]
+  videos        Video[]
+  commands      CommandLog[]
+  subscription  Subscription?
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model YouTubeChannel {
+  id              String   @id @default(cuid())
+  userId          String
+  channelId       String   // YouTube channel ID
+  title           String
+  description     String?  @db.Text
+  thumbnailUrl    String?
+  customUrl       String?
+  subscriberCount Int?
+  viewCount       BigInt?
+  videoCount      Int?
+  accessToken     String   @db.Text  // encrypted at rest in production
+  refreshToken    String?  @db.Text
+  tokenExpiresAt  DateTime?
+  scopes          String[]
+  isPrimary       Boolean  @default(false)
+  lastSyncedAt    DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects Project[]
+  videos   Video[]
+  analytics ChannelAnalytics[]
+
+  @@unique([userId, channelId])
+  @@map("youtube_channels")
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  channelId   String?
+  title       String
+  description String?       @db.Text
+  status      ProjectStatus @default(DRAFT)
+  command     String        @db.Text  // original natural-language command
+  style       String?       // educational, documentary, horror, etc.
+  targetDurationSec Int?
+  inputType   String?       // youtube_url, upload, prompt, etc.
+  inputUrl    String?
+  inputMeta   Json?
+  resultMeta  Json?
+  error       String?       @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  completedAt DateTime?
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel YouTubeChannel? @relation(fields: [channelId], references: [id])
+  videos  Video[]
+  jobs    Job[]
+
+  @@index([userId, status])
+  @@map("projects")
+}
+
+model Video {
+  id              String          @id @default(cuid())
+  userId          String
+  projectId       String?
+  channelId       String?
+  title           String
+  description     String?         @db.Text
+  tags            String[]
+  hashtags        String[]
+  categoryId      String?
+  visibility      VideoVisibility @default(PRIVATE)
+  durationSec     Int?
+  filePath        String?         // local or S3 path of rendered file
+  thumbnailPath   String?
+  youtubeVideoId  String?         // set after successful upload
+  uploadStatus    UploadStatus    @default(PENDING)
+  scheduledAt     DateTime?
+  uploadedAt      DateTime?
+  seoScore        Float?
+  metadata        Json?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project?        @relation(fields: [projectId], references: [id])
+  channel YouTubeChannel? @relation(fields: [channelId], references: [id])
+
+  @@index([userId])
+  @@index([youtubeVideoId])
+  @@map("videos")
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  projectId   String?
+  type        JobType
+  status      JobStatus @default(WAITING)
+  priority    Int       @default(0)
+  payload     Json
+  result      Json?
+  error       String?   @db.Text
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  bullJobId   String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@index([status, type])
+  @@map("jobs")
+}
+
+model CommandLog {
+  id        String   @id @default(cuid())
+  userId    String
+  command   String   @db.Text
+  parsed    Json?
+  projectId String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("command_logs")
+}
+
+model ChannelAnalytics {
+  id              String   @id @default(cuid())
+  channelId       String
+  date            DateTime @db.Date
+  views           BigInt   @default(0)
+  subscribersGained Int    @default(0)
+  subscribersLost Int      @default(0)
+  estimatedMinutesWatched BigInt @default(0)
+  averageViewDuration Float?
+  likes           Int      @default(0)
+  comments        Int      @default(0)
+  shares          Int      @default(0)
+  raw             Json?
+  createdAt       DateTime @default(now())
+
+  channel YouTubeChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, date])
+  @@map("channel_analytics")
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  planId               String             // e.g. starter, pro, agency
+  status               SubscriptionStatus @default(TRIALING)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  razorpaySubscriptionId String?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Plan {
+  id          String   @id @default(cuid())
+  name        String   @unique  // starter, pro, agency
+  displayName String
+  priceMonthly Int     // in cents / paise
+  priceYearly  Int?
+  currency    String   @default("USD")
+  features    Json     // limits: videos/month, channels, 4k, etc.
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("plans")
+}

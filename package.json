@@ -1,0 +1,34 @@
+{
+  "name": "yt-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-ready AI SaaS for autonomous YouTube content creation and management",
+  "workspaces": [
+    "frontend",
+    "worker"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend",
+    "build": "npm run build --workspace=frontend",
+    "start": "npm run start --workspace=frontend",
+    "worker": "npm run start --workspace=worker",
+    "db:generate": "prisma generate --schema=database/prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema=database/prisma/schema.prisma",
+    "db:push": "prisma db push --schema=database/prisma/schema.prisma",
+    "db:studio": "prisma studio --schema=database/prisma/schema.prisma",
+    "lint": "npm run lint --workspace=frontend",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bullmq": "^5.25.0",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.3"
+  }
+}
