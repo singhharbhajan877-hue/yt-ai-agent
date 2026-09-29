@@ -2,13 +2,14 @@ import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { prisma } from "./prisma";
 
+const useSecureCookies = process.env.NEXTAUTH_URL?.startsWith("https://") ?? true;
+
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID as string,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
       allowDangerousEmailAccountLinking: true,
-      // Basic login only. YouTube scopes are requested later via /api/channels/connect
       authorization: {
         params: {
           prompt: "select_account",
@@ -20,7 +21,6 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async signIn({ user }) {
-      // Never block OAuth on DB errors — login must succeed
       if (!user?.email) return false;
       try {
         const dbUser = await prisma.user.upsert({
@@ -64,7 +64,8 @@ export const authOptions: NextAuthOptions = {
         session.user.name = (token.name as string) || session.user.name;
         session.user.image = (token.picture as string) || session.user.image;
       }
-      (session as { accessToken?: string }).accessToken = token.accessToken as string;
+      (session as { accessToken?: string }).accessToken =
+        token.accessToken as string;
       return session;
     },
   },
@@ -76,6 +77,42 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60,
   },
+  cookies: {
+    sessionToken: {
+      name: useSecureCookies
+        ? "__Secure-next-auth.session-token"
+        : "next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: useSecureCookies,
+      },
+    },
+    callbackUrl: {
+      name: useSecureCookies
+        ? "__Secure-next-auth.callback-url"
+        : "next-auth.callback-url",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: useSecureCookies,
+      },
+    },
+    csrfToken: {
+      name: useSecureCookies
+        ? "__Host-next-auth.csrf-token"
+        : "next-auth.csrf-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: useSecureCookies,
+      },
+    },
+  },
   secret: process.env.NEXTAUTH_SECRET,
-  debug: process.env.NODE_ENV === "development",
+  useSecureCookies,
+  debug: true,
 };
