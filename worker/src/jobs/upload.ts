@@ -1,18 +1,16 @@
 import { google } from "googleapis";
 import { PrismaClient } from "@prisma/client";
 import fs from "fs";
+import { processCopyrightCheck } from "./copyright-check";
 
 const prisma = new PrismaClient();
 
-/**
- * Upload via official YouTube Data API v3 (resumable).
- * Requires a connected channel with valid OAuth tokens.
- */
 export async function processUpload(data: {
   videoId: string;
   channelId?: string;
   visibility?: "private" | "unlisted" | "public";
   publishAt?: string;
+  skipCopyrightCheck?: boolean;
 }) {
   console.log("[upload] video", data.videoId);
 
@@ -22,15 +20,26 @@ export async function processUpload(data: {
   });
   if (!video) throw new Error("Video not found");
 
+  // Copyright scan
+  if (!data.skipCopyrightCheck) {
+    const report = await processCopyrightCheck({ videoId: video.id });
+    if (report.blockUpload) {
+      await prisma.video.update({
+        where: { id: video.id },
+        data: { uploadStatus: "FAILED" },
+      });
+      throw new Error(
+        `Upload blocked by copyright risk check (${report.risk}): ${(report.reasons || []).join("; ")}`
+      );
+    }
+  }
+
   let channel = video.channel;
   if (!channel && data.channelId) {
     channel = await prisma.youTubeChannel.findUnique({ where: { id: data.channelId } });
   }
   if (!channel) {
-    // Fallback: first channel of the user
-    channel = await prisma.youTubeChannel.findFirst({
-      where: { userId: video.userId },
-    });
+    channel = await prisma.youTubeChannel.findFirst({ where: { userId: video.userId } });
   }
   if (!channel) {
     throw new Error("No YouTube channel connected. Connect one in Settings.");
@@ -38,7 +47,7 @@ export async function processUpload(data: {
 
   if (!video.filePath || !fs.existsSync(video.filePath)) {
     throw new Error(
-      "No rendered video file available for upload. Complete the media pipeline first."
+      "No rendered video file available. Complete the media pipeline or attach a file first."
     );
   }
 
@@ -51,9 +60,14 @@ export async function processUpload(data: {
     refresh_token: channel.refreshToken || undefined,
   });
 
-  const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+  // Refresh token if needed is handled by google client on 401 in many cases;
+  // still set credentials from DB.
 
-  const visibility = data.visibility || video.visibility.toLowerCase() || "private";
+  const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+  const visibility = (data.visibility || video.visibility.toLowerCase() || "private") as
+    | "private"
+    | "unlisted"
+    | "public";
 
   const res = await youtube.videos.insert({
     part: ["snippet", "status"],
@@ -65,8 +79,8 @@ export async function processUpload(data: {
         categoryId: video.categoryId || "22",
       },
       status: {
-        privacyStatus: visibility as any,
-        publishAt: data.publishAt || undefined,
+        privacyStatus: visibility,
+        publishAt: data.publishAt || (video.scheduledAt ? video.scheduledAt.toISOString() : undefined),
         selfDeclaredMadeForKids: false,
       },
     },
@@ -82,15 +96,19 @@ export async function processUpload(data: {
     where: { id: video.id },
     data: {
       youtubeVideoId,
-      uploadStatus: data.publishAt ? "SCHEDULED" : "UPLOADED",
+      uploadStatus: data.publishAt || video.scheduledAt ? "SCHEDULED" : "UPLOADED",
       uploadedAt: new Date(),
       visibility: visibility.toUpperCase() as any,
       channelId: channel.id,
+      scheduledAt: data.publishAt ? new Date(data.publishAt) : video.scheduledAt,
     },
   });
 
-  // Optional: set custom thumbnail if file exists and is an image
-  if (video.thumbnailPath && fs.existsSync(video.thumbnailPath) && video.thumbnailPath.match(/\.(jpg|jpeg|png)$/i)) {
+  if (
+    video.thumbnailPath &&
+    fs.existsSync(video.thumbnailPath) &&
+    /\.(jpg|jpeg|png)$/i.test(video.thumbnailPath)
+  ) {
     try {
       await youtube.thumbnails.set({
         videoId: youtubeVideoId,

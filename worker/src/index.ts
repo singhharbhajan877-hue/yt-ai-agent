@@ -1,4 +1,4 @@
-import { Worker } from "bullmq";
+import { Worker, Queue } from "bullmq";
 import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import { processDownload } from "./jobs/download";
@@ -8,7 +8,8 @@ import { processGenerateLong } from "./jobs/generate-long";
 import { processGenerateSeo } from "./jobs/generate-seo";
 import { processGenerateThumbnail } from "./jobs/generate-thumbnail";
 import { processUpload } from "./jobs/upload";
-import { Queue } from "bullmq";
+import { processCommentReply } from "./jobs/comment-reply";
+import { processAnalyticsRecommend } from "./jobs/analytics-recommend";
 
 const prisma = new PrismaClient();
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -16,8 +17,17 @@ const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379"
 });
 
 const mediaQueue = new Queue("media", { connection });
+const uploadQueue = new Queue("upload", {
+  connection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: { type: "exponential", delay: 15000 },
+    removeOnComplete: 100,
+    removeOnFail: 50,
+  },
+});
 
-console.log("[worker] YT AI Agent workers starting...");
+console.log("[worker] YT AI Agent autonomous workers starting...");
 
 async function updateJob(
   dbJobId: string | undefined,
@@ -42,13 +52,12 @@ async function updateJob(
 }
 
 async function setProjectProgress(projectId: string, progress: number, status?: any) {
-  await prisma.project.update({
-    where: { id: projectId },
-    data: {
-      progress,
-      ...(status ? { status } : {}),
-    },
-  }).catch(() => {});
+  await prisma.project
+    .update({
+      where: { id: projectId },
+      data: { progress, ...(status ? { status } : {}) },
+    })
+    .catch(() => {});
 }
 
 async function maybeCompleteProject(projectId: string) {
@@ -57,7 +66,6 @@ async function maybeCompleteProject(projectId: string) {
   if (pending.length > 0) return;
   const anyFailed = jobs.some((j) => j.status === "FAILED");
   const project = await prisma.project.findUnique({ where: { id: projectId } });
-  // Keep PREVIEW if shorts were generated successfully
   if (project?.status === "PREVIEW" && !anyFailed) return;
   await prisma.project.update({
     where: { id: projectId },
@@ -69,9 +77,7 @@ async function maybeCompleteProject(projectId: string) {
   });
 }
 
-/** Chain next jobs after download/analyze */
 async function chainAfterDownload(projectId: string, userId: string, downloadResult: any) {
-  // Enqueue analyze
   const analyzeJob = await prisma.job.create({
     data: {
       projectId,
@@ -110,13 +116,12 @@ async function chainAfterAnalyze(projectId: string, userId: string, analysis: an
       },
     });
     const bull = await mediaQueue.add("generate_long", {
-      ...job.payload as object,
+      ...(job.payload as object),
       dbJobId: job.id,
       userId,
     });
     await prisma.job.update({ where: { id: job.id }, data: { bullJobId: bull.id } });
   } else {
-    // Default: Shorts
     const job = await prisma.job.create({
       data: {
         projectId,
@@ -135,7 +140,6 @@ async function chainAfterAnalyze(projectId: string, userId: string, analysis: an
     await prisma.job.update({ where: { id: job.id }, data: { bullJobId: bull.id } });
   }
 
-  // Always queue SEO + thumbnail after content
   for (const [type, name] of [
     ["GENERATE_SEO", "generate_seo"],
     ["GENERATE_THUMBNAIL", "generate_thumbnail"],
@@ -167,54 +171,57 @@ const mediaWorker = new Worker(
           await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
           await chainAfterDownload(projectId, userId, result);
           break;
-
         case "analyze":
           await setProjectProgress(projectId, 25, "ANALYZING");
           result = await processAnalyze(job.data);
           await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
           await chainAfterAnalyze(projectId, userId, result);
           break;
-
         case "generate_shorts":
           await setProjectProgress(projectId, 45, "PROCESSING");
           result = await processGenerateShorts(job.data);
           await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
           break;
-
         case "generate_long":
           await setProjectProgress(projectId, 45, "PROCESSING");
           result = await processGenerateLong(job.data);
           await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
           break;
-
         case "generate_seo":
           result = await processGenerateSeo(job.data);
           await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
           break;
-
         case "generate_thumbnail":
           result = await processGenerateThumbnail(job.data);
           await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
           break;
-
+        case "comment_reply":
+          result = await processCommentReply(job.data);
+          await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
+          break;
+        case "analytics_recommend":
+          result = await processAnalyticsRecommend(job.data);
+          await updateJob(dbJobId, "COMPLETED", result, undefined, 100);
+          break;
         default:
           throw new Error(`Unknown media job: ${job.name}`);
       }
 
-      await maybeCompleteProject(projectId);
+      if (projectId) await maybeCompleteProject(projectId);
       return result;
     } catch (err: any) {
       console.error(`[media] ${job.name} failed`, err);
       await updateJob(dbJobId, "FAILED", undefined, err.message);
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { status: "FAILED", error: err.message },
-      }).catch(() => {});
-      await maybeCompleteProject(projectId);
+      if (projectId) {
+        await prisma.project
+          .update({ where: { id: projectId }, data: { status: "FAILED", error: err.message } })
+          .catch(() => {});
+        await maybeCompleteProject(projectId);
+      }
       throw err;
     }
   },
-  { connection, concurrency: 1 } // serial for FFmpeg/CPU safety
+  { connection, concurrency: 1 }
 );
 
 const uploadWorker = new Worker(
@@ -228,15 +235,21 @@ const uploadWorker = new Worker(
       return result;
     } catch (err: any) {
       await updateJob(dbJobId, "FAILED", undefined, err.message);
+      // BullMQ will retry per queue defaultJobOptions
       throw err;
     }
   },
-  { connection, concurrency: 1 }
+  {
+    connection,
+    concurrency: 1,
+  }
 );
 
 mediaWorker.on("completed", (job) => console.log(`[media] ✓ ${job.name} ${job.id}`));
 mediaWorker.on("failed", (job, err) => console.error(`[media] ✗ ${job?.name}`, err.message));
 uploadWorker.on("completed", (job) => console.log(`[upload] ✓ ${job.id}`));
-uploadWorker.on("failed", (job, err) => console.error(`[upload] ✗`, err.message));
+uploadWorker.on("failed", (job, err) =>
+  console.error(`[upload] ✗ attempt failed (will retry if attempts left)`, err.message)
+);
 
-console.log("[worker] Ready – download → analyze → shorts/long → seo → thumbnail → upload");
+console.log("[worker] Ready — download | analyze | shorts | long | seo | thumbnail | upload | comments | analytics");
