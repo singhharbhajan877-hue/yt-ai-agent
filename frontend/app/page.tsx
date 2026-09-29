@@ -14,7 +14,7 @@ export default function HomePage() {
               Dashboard
             </Link>
             <Link
-              href="/api/auth/signin"
+              href="/auth/signin"
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               Sign in with Google
@@ -37,7 +37,7 @@ export default function HomePage() {
           </p>
           <div className="flex flex-wrap justify-center gap-4 pt-4">
             <Link
-              href="/api/auth/signin"
+              href="/auth/signin"
               className="rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white shadow-lg hover:bg-blue-700 transition"
             >
               Get Started Free
