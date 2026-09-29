@@ -2,35 +2,26 @@ import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { prisma } from "./prisma";
 
-const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
-const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
-
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
-      clientId: googleClientId,
-      clientSecret: googleClientSecret,
+      clientId: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
       allowDangerousEmailAccountLinking: true,
+      // Basic login only. YouTube scopes are requested later via /api/channels/connect
       authorization: {
         params: {
-          scope: [
-            "openid",
-            "email",
-            "profile",
-            "https://www.googleapis.com/auth/youtube.upload",
-            "https://www.googleapis.com/auth/youtube.readonly",
-            "https://www.googleapis.com/auth/youtube",
-          ].join(" "),
+          prompt: "select_account",
           access_type: "offline",
-          prompt: "consent",
           response_type: "code",
         },
       },
     }),
   ],
   callbacks: {
-    async signIn({ user, account }) {
-      if (!user.email) return false;
+    async signIn({ user }) {
+      // Never block OAuth on DB errors — login must succeed
+      if (!user?.email) return false;
       try {
         const dbUser = await prisma.user.upsert({
           where: { email: user.email },
@@ -45,65 +36,35 @@ export const authOptions: NextAuthOptions = {
             credits: 50,
           },
         });
-
-        if (account?.provider === "google") {
-          await prisma.account.upsert({
-            where: {
-              provider_providerAccountId: {
-                provider: account.provider,
-                providerAccountId: account.providerAccountId,
-              },
-            },
-            update: {
-              access_token: account.access_token ?? null,
-              refresh_token: account.refresh_token ?? null,
-              expires_at: account.expires_at ?? null,
-              token_type: account.token_type ?? null,
-              scope: account.scope ?? null,
-              id_token: account.id_token ?? null,
-            },
-            create: {
-              userId: dbUser.id,
-              type: account.type,
-              provider: account.provider,
-              providerAccountId: account.providerAccountId,
-              access_token: account.access_token ?? null,
-              refresh_token: account.refresh_token ?? null,
-              expires_at: account.expires_at ?? null,
-              token_type: account.token_type ?? null,
-              scope: account.scope ?? null,
-              id_token: account.id_token ?? null,
-            },
-          });
-        }
-
-        (user as any).id = dbUser.id;
-        return true;
-      } catch (e) {
-        console.error("[auth] signIn error", e);
-        return false;
+        (user as { id?: string }).id = dbUser.id;
+      } catch (err) {
+        console.error("[auth] user upsert failed (login still allowed):", err);
+        (user as { id?: string }).id = user.email;
       }
+      return true;
     },
     async jwt({ token, account, user }) {
       if (user) {
-        token.userId = (user as any).id || user.id;
+        token.userId = (user as { id?: string }).id || user.id || user.email;
         token.email = user.email;
+        token.name = user.name;
+        token.picture = user.image;
       }
       if (account) {
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
         token.expiresAt = account.expires_at;
-        token.scope = account.scope;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        (session.user as any).id = token.userId as string;
-        session.user.email = token.email as string;
+        (session.user as { id?: string }).id = token.userId as string;
+        session.user.email = (token.email as string) || session.user.email;
+        session.user.name = (token.name as string) || session.user.name;
+        session.user.image = (token.picture as string) || session.user.image;
       }
-      (session as any).accessToken = token.accessToken;
-      (session as any).refreshToken = token.refreshToken;
+      (session as { accessToken?: string }).accessToken = token.accessToken as string;
       return session;
     },
   },
@@ -116,5 +77,5 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60,
   },
   secret: process.env.NEXTAUTH_SECRET,
-  debug: true,
+  debug: process.env.NODE_ENV === "development",
 };
