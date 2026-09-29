@@ -11,6 +11,7 @@ export default function SettingsPage() {
   const [channels, setChannels] = useState<any[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/auth/signin");
@@ -47,6 +48,34 @@ export default function SettingsPage() {
     loadChannels();
   }
 
+  async function runCommentReply(id: string) {
+    setBusy(id + "-reply");
+    try {
+      const res = await fetch(`/api/channels/${id}/reply-comments`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMsg("Comment auto-reply job queued");
+    } catch (e: any) {
+      setMsg(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runAnalytics(id: string) {
+    setBusy(id + "-analytics");
+    try {
+      const res = await fetch(`/api/channels/${id}/analytics`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMsg("Analytics + recommendations job queued");
+    } catch (e: any) {
+      setMsg(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (status === "loading") return <div className="p-8">Loading…</div>;
 
   return (
@@ -70,37 +99,49 @@ export default function SettingsPage() {
             <p><span className="text-slate-500">Email:</span> {session?.user?.email}</p>
             <p><span className="text-slate-500">Name:</span> {session?.user?.name}</p>
           </div>
-          <button
-            onClick={() => signOut({ callbackUrl: "/" })}
-            className="text-sm text-red-600 hover:underline"
-          >
+          <button onClick={() => signOut({ callbackUrl: "/" })} className="text-sm text-red-600 hover:underline">
             Sign out
           </button>
         </section>
 
         <section className="rounded-2xl border bg-white dark:bg-slate-900 p-6 space-y-4">
-          <h2 className="font-semibold">YouTube Channels</h2>
+          <h2 className="font-semibold">YouTube Channels (multi-channel)</h2>
           <p className="text-sm text-slate-600">
-            Connect your YouTube channel using official Google OAuth. Tokens are stored securely and used only with the YouTube Data API v3.
+            Connect one or more channels. Tokens used only with official YouTube Data API v3.
           </p>
 
           {channels.length > 0 ? (
             <ul className="space-y-3">
               {channels.map((c) => (
-                <li key={c.id} className="flex items-center justify-between border rounded-lg p-3">
-                  <div className="flex items-center gap-3">
-                    {c.thumbnailUrl && <img src={c.thumbnailUrl} className="w-10 h-10 rounded-full" alt="" />}
-                    <div>
-                      <div className="font-medium text-sm">{c.title}</div>
-                      <div className="text-xs text-slate-500">{c.channelId}</div>
+                <li key={c.id} className="border rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {c.thumbnailUrl && <img src={c.thumbnailUrl} className="w-10 h-10 rounded-full" alt="" />}
+                      <div>
+                        <div className="font-medium text-sm">{c.title}</div>
+                        <div className="text-xs text-slate-500">{c.channelId}</div>
+                      </div>
                     </div>
+                    <button onClick={() => disconnect(c.id)} className="text-xs text-red-600 hover:underline">
+                      Disconnect
+                    </button>
                   </div>
-                  <button
-                    onClick={() => disconnect(c.id)}
-                    className="text-xs text-red-600 hover:underline"
-                  >
-                    Disconnect
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => runCommentReply(c.id)}
+                      disabled={!!busy}
+                      className="text-xs rounded bg-slate-800 text-white px-2 py-1 disabled:opacity-50"
+                    >
+                      {busy === c.id + "-reply" ? "…" : "Auto-reply comments"}
+                    </button>
+                    <button
+                      onClick={() => runAnalytics(c.id)}
+                      disabled={!!busy}
+                      className="text-xs rounded border px-2 py-1 disabled:opacity-50"
+                    >
+                      {busy === c.id + "-analytics" ? "…" : "Sync analytics + tips"}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -116,13 +157,6 @@ export default function SettingsPage() {
             {syncing ? "Connecting…" : "Connect / Refresh YouTube Channel"}
           </button>
           {msg && <p className="text-sm text-slate-700">{msg}</p>}
-        </section>
-
-        <section className="rounded-2xl border bg-white dark:bg-slate-900 p-6 space-y-2">
-          <h2 className="font-semibold">API Keys (server-side only)</h2>
-          <p className="text-sm text-slate-600">
-            Gemini, Whisper, Stripe, and other keys are configured via environment variables on the server. They never appear in the browser.
-          </p>
         </section>
       </main>
     </div>
